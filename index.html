@@ -42,147 +42,271 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Trembyle</title>
-  <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.development.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
+  <title>Trembyle: The Great Diffusion</title>
+  <!-- Production React builds for better performance -->
+  <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/@babel/standalone@7.22.5/Babel.js"></script>
- <style>
+  <style>
+    /* Responsive ASCII art scaling */
     @media screen and (max-width: 640px) {
       pre {
         transform-origin: center;
-        transform: scale(0.6); /* Shrink for tiny screens */
-        display: block; /* Ensure block-level for centering */
+        transform: scale(0.6);
+        display: block;
         margin-left: auto;
         margin-right: auto;
       }
+    }
+    /* High-contrast mode */
+    .high-contrast {
+      background-color: #000;
+      color: #fff;
+    }
+    .high-contrast .bg-gray-800 {
+      background-color: #333;
+    }
+    .high-contrast .text-green-400 {
+      color: #fff;
+    }
+    .high-contrast .bg-green-600 {
+      background-color: #00cc00;
     }
   </style>
 </head>
 <body class="bg-gray-900 text-green-400 font-mono">
   <div id="root"></div>
   <script type="text/babel">
-    const { useState, useEffect, useRef } = React;
+    const { useState, useEffect, useRef, useReducer } = React;
 
-    // Game Data
-    const gameState = {
+    // Game state reducer
+    const initialState = {
       currentRoom: 'cavern',
       inventory: [],
       talkedToCanuk: false,
       malveoDefeated: false,
+      health: 100,
       rooms: {
         cavern: {
           description: 'You are in the Illumynite Caverns, glowing with magical light. A Crystal of Illumynite sparkles on a pedestal. Canuk stands nearby, muttering about deception. Exits lead north and east.',
+          examine: 'The cavern walls pulse with luminescent veins. Canuk’s eyes dart nervously.',
           exits: { north: 'library', east: 'vault' },
           items: ['crystal'],
         },
         library: {
           description: 'A dusty library filled with ancient tomes. A Scroll of Deception lies open on a table. The air hums with magic. An exit leads south.',
+          examine: 'The tomes are inscribed with runes. The Scroll glows faintly.',
           exits: { south: 'cavern' },
           items: ['scroll'],
         },
         vault: {
           description: 'A sealed vault with a magical lock. An Orb of Longevity glows faintly inside a glass case. The evil wizard Malveo lurks here, eyeing you suspiciously. An exit leads west.',
+          examine: 'The lock hums with energy. Malveo’s gaze is unsettling.',
           exits: { west: 'cavern' },
           items: ['orb'],
         },
       },
       items: {
-        crystal: { name: 'Crystal of Illumynite', description: 'A glowing crystal pulsing with magical energy.' },
-        scroll: { name: 'Scroll of Deception', description: 'A scroll inscribed with illusion spells.' },
-        orb: { name: 'Orb of Longevity', description: 'An orb that grants eternal life.' },
+        crystal: { 
+          name: 'Crystal of Illumynite', 
+          description: 'A glowing crystal pulsing with magical energy.',
+          examine: 'The crystal’s light shifts like a living flame.'
+        },
+        scroll: { 
+          name: 'Scroll of Deception', 
+          description: 'A scroll inscribed with illusion spells.',
+          examine: 'The scroll’s runes describe a spell to confuse foes.'
+        },
+        orb: { 
+          name: 'Orb of Longevity', 
+          description: 'An orb that grants eternal life.',
+          examine: 'The orb’s glow promises vitality but feels heavy.'
+        },
       },
     };
 
+    function gameReducer(state, action) {
+      switch (action.type) {
+        case 'SET_ROOM':
+          return { ...state, currentRoom: action.payload };
+        case 'ADD_ITEM':
+          return { ...state, inventory: [...state.inventory, action.payload] };
+        case 'REMOVE_ITEM':
+          return {
+            ...state,
+            rooms: {
+              ...state.rooms,
+              [state.currentRoom]: {
+                ...state.rooms[state.currentRoom],
+                items: state.rooms[state.currentRoom].items.filter(i => i !== action.payload),
+              },
+            },
+          };
+        case 'TALK_TO_CANUK':
+          return { ...state, talkedToCanuk: true, malveoDefeated: true };
+        case 'TAKE_DAMAGE':
+          return { ...state, health: Math.max(0, state.health - action.payload) };
+        default:
+          return state;
+      }
+    }
+
     const App = () => {
-      const [output, setOutput] = useState(['Welcome to Trembyle! You are Wizard Trembyle, tasked with casting the Great Diffusion. Type commands like "look", "take crystal", or "talk to Canuk".']);
+      const [output, setOutput] = useState(['Welcome to Trembyle! You are Wizard Trembyle, tasked with casting the Great Diffusion. Type commands like "look", "take crystal", "examine room", or "talk to Canuk".']);
       const [input, setInput] = useState('');
+      const [isHighContrast, setIsHighContrast] = useState(false);
       const inputRef = useRef(null);
-      const stateRef = useRef(gameState);
+      const [state, dispatch] = useReducer(gameReducer, initialState);
 
-      // Focus input on mount
-      useEffect(() => {
-        inputRef.current?.focus();
-        look(); // Display initial room description
-      }, []);
-
-      // Parse and process commands
-      const processCommand = (command) => {
-        const cmd = command.toLowerCase().trim();
-        let response = '';
-
-        if (cmd === 'look') {
-          response = look();
-        } else if (cmd.startsWith('go ')) {
-          response = go(cmd.split(' ').slice(1).join(' '));
-        } else if (cmd.startsWith('take ')) {
-          response = take(cmd.split(' ').slice(1).join(' '));
-        } else if (cmd === 'inventory') {
-          response = inventory();
-        } else if (cmd === 'talk to canuk') {
-          response = talkToCanuk();
-        } else if (cmd === 'cast diffusion') {
-          response = castDiffusion();
-        } else {
-          response = 'I don’t understand that command. Try "look", "go north", "take crystal", or "talk to Canuk".';
-        }
-
-        setOutput(prev => [...prev, '> ' + command, response]);
+      // Sound effects
+      const playSound = (type) => {
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        osc.type = type === 'success' ? 'sine' : 'square';
+        osc.frequency.setValueAtTime(type === 'success' ? 440 : 220, ctx.currentTime);
+        osc.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.2);
       };
 
-      // Command Handlers
-      const look = () => {
-        const room = stateRef.current.rooms[stateRef.current.currentRoom];
-        return room.description;
+      // Load/Save game
+      useEffect(() => {
+        const saved = localStorage.getItem('trembyleState');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          dispatch({ type: 'SET_ROOM', payload: parsed.currentRoom });
+          parsed.inventory.forEach(item => dispatch({ type: 'ADD_ITEM', payload: item }));
+          if (parsed.talkedToCanuk) dispatch({ type: 'TALK_TO_CANUK' });
+          setOutput(prev => [...prev, 'Game loaded from save.']);
+        }
+        inputRef.current?.focus();
+        look(); // Initial room description
+      }, []);
+
+      const saveGame = () => {
+        localStorage.setItem('trembyleState', JSON.stringify({
+          currentRoom: state.currentRoom,
+          inventory: state.inventory,
+          talkedToCanuk: state.talkedToCanuk,
+          malveoDefeated: state.malveoDefeated,
+        }));
+        return 'Game saved.';
+      };
+
+      // Command handlers
+      const look = () => state.rooms[state.currentRoom].description;
+      
+      const examine = (target) => {
+        if (target === 'room') {
+          return state.rooms[state.currentRoom].examine;
+        }
+        if (state.inventory.includes(target)) {
+          return state.items[target].examine;
+        }
+        if (state.rooms[state.currentRoom].items.includes(target)) {
+          return state.items[target].examine;
+        }
+        return `You can't examine ${target}.`;
       };
 
       const go = (direction) => {
-        const room = stateRef.current.rooms[stateRef.current.currentRoom];
+        const room = state.rooms[state.currentRoom];
         if (!room.exits[direction]) {
           return 'You can’t go that way.';
         }
-        stateRef.current.currentRoom = room.exits[direction];
+        dispatch({ type: 'SET_ROOM', payload: room.exits[direction] });
+        playSound('success');
         return look();
       };
 
       const take = (item) => {
-        const room = stateRef.current.rooms[stateRef.current.currentRoom];
+        const room = state.rooms[state.currentRoom];
         if (!room.items.includes(item)) {
           return `There’s no ${item} here.`;
         }
-        if (item === 'orb' && !stateRef.current.malveoDefeated) {
-          return 'Malveo blocks you! Talk to Canuk for a plan!';
+        if (item === 'orb' && !state.malveoDefeated) {
+          dispatch({ type: 'TAKE_DAMAGE', payload: 50 });
+          playSound('error');
+          return state.health <= 50 
+            ? 'Malveo blasts you with dark magic! You collapse, defeated.'
+            : 'Malveo blocks you with a spell, dealing damage! Talk to Canuk for a plan!';
         }
-        stateRef.current.inventory.push(item);
-        room.items = room.items.filter(i => i !== item);
-        return `You take the ${stateRef.current.items[item].name}.`;
+        dispatch({ type: 'ADD_ITEM', payload: item });
+        dispatch({ type: 'REMOVE_ITEM', payload: item });
+        playSound('success');
+        return `You take the ${state.items[item].name}.`;
       };
 
       const inventory = () => {
-        if (stateRef.current.inventory.length === 0) {
+        if (state.inventory.length === 0) {
           return 'Your inventory is empty.';
         }
-        return 'You are carrying: ' + stateRef.current.inventory.map(i => stateRef.current.items[i].name).join(', ');
+        return 'You are carrying: ' + state.inventory.map(i => state.items[i].name).join(', ');
       };
 
       const talkToCanuk = () => {
-        if (stateRef.current.currentRoom !== 'cavern') {
+        if (state.currentRoom !== 'cavern') {
           return 'Canuk is not here.';
         }
-        stateRef.current.talkedToCanuk = true;
-        stateRef.current.malveoDefeated = true; // Simplified puzzle: talking to Canuk defeats Malveo
+        dispatch({ type: 'TALK_TO_CANUK' });
+        playSound('success');
         return 'Canuk whispers, "I’ll distract Malveo with an illusion. Grab the orb now!"';
+      };
+
+      const use = (item) => {
+        if (!state.inventory.includes(item)) {
+          return `You don’t have ${item}.`;
+        }
+        if (item === 'scroll') {
+          return 'You read the Scroll of Deception: "Illusions can fool even the mightiest wizards."';
+        }
+        return `You can’t use the ${state.items[item].name} right now.`;
       };
 
       const castDiffusion = () => {
         const requiredItems = ['crystal', 'scroll', 'orb'];
-        if (stateRef.current.currentRoom !== 'cavern') {
+        if (state.currentRoom !== 'cavern') {
           return 'You must be in the Illumynite Caverns to cast the Great Diffusion.';
         }
-        if (!requiredItems.every(item => stateRef.current.inventory.includes(item))) {
+        if (!requiredItems.every(item => state.inventory.includes(item))) {
           return 'You need the Crystal of Illumynite, Scroll of Deception, and Orb of Longevity to cast the Great Diffusion.';
         }
+        playSound('success');
         return 'You combine the Crystal, Scroll, and Orb, casting the Great Diffusion! Magic scatters across the winds, cleansing the GUE. Victory is yours, Wizard Trembyle!';
+      };
+
+      // Flexible command parser
+      const processCommand = (command) => {
+        if (state.health <= 0) {
+          return 'You are defeated. Load a save or start over.';
+        }
+        const cmd = command.toLowerCase().trim();
+        let response = '';
+
+        const patterns = [
+          { regex: /^(look|describe)$/, handler: look },
+          { regex: /^(examine|inspect)\s+(.+)$/, handler: (match) => examine(match[2]) },
+          { regex: /^go\s+(.+)$/, handler: (match) => go(match[1]) },
+          { regex: /^(take|pickup)\s+(.+)$/, handler: (match) => take(match[2]) },
+          { regex: /^inventory$/, handler: inventory },
+          { regex: /^talk\s+to\s+canuk$/, handler: talkToCanuk },
+          { regex: /^use\s+(.+)$/, handler: (match) => use(match[1]) },
+          { regex: /^cast\s+diffusion$/, handler: castDiffusion },
+          { regex: /^save$/, handler: saveGame },
+        ];
+
+        const match = patterns.find(p => p.regex.test(cmd));
+        if (match) {
+          const groups = cmd.match(match.regex);
+          response = match.handler(groups);
+        } else {
+          response = cmd 
+            ? 'I don’t understand that command. Try "look", "go north", "take crystal", "examine room", or "talk to Canuk".'
+            : 'Please enter a command.';
+        }
+
+        setOutput(prev => [...prev, '> ' + command, response]);
       };
 
       // Handle input
@@ -193,7 +317,7 @@
         inputRef.current?.focus();
       };
 
-      // ASCII logo for Trembyle
+      // ASCII logo
       const asciiArt = `
 ████████╗██████╗ ███████╗███╗   ███╗██████╗ ██╗   ██╗██╗     ███████╗
 ╚══██╔══╝██╔══██╗██╔════╝████╗ ████║██╔══██╗╚██╗ ██╔╝██║     ██╔════╝
@@ -202,18 +326,27 @@
    ██║   ██║  ██║███████╗██║ ╚═╝ ██║██████╔╝   ██║   ███████╗███████╗
    ╚═╝   ╚═╝  ╚═╝╚══════╝╚═╝     ╚═╝╚═════╝    ╚═╝   ╚══════╝╚══════╝
                                                                      
-                                                                                                                   
    A Zork Game
       `;
 
       return (
-        <div className="p-4 max-w-4xl mx-auto">
-<div className="w-full flex justify-center max-w-full">
-  <pre className="font-mono text-xs sm:text-sm md:text-base lg:text-lg whitespace-pre text-center mb-4 transform scale-75 sm:scale-100">
-    {asciiArt}
-  </pre>
-</div>
+        <div className={`p-4 max-w-4xl mx-auto ${isHighContrast ? 'high-contrast' : ''}`}>
+          <div className="w-full flex justify-center max-w-full">
+            <pre className="font-mono text-xs sm:text-sm md:text-base lg:text-lg whitespace-pre text-center mb-4 transform scale-75 sm:scale-100">
+              {asciiArt}
+            </pre>
+          </div>
           <h2 className="text-xl mb-2">Trembyle: The Great Diffusion</h2>
+          <div className="flex justify-between mb-4">
+            <p>Health: {state.health}%</p>
+            <button
+              onClick={() => setIsHighContrast(!isHighContrast)}
+              className="bg-gray-600 text-white p-2 rounded"
+              aria-label="Toggle high contrast mode"
+            >
+              {isHighContrast ? 'Normal Mode' : 'High Contrast'}
+            </button>
+          </div>
           <div className="bg-gray-800 p-4 rounded mb-4 h-96 overflow-y-auto">
             {output.map((line, index) => (
               <p key={index} className="whitespace-pre-wrap">{line}</p>
@@ -226,18 +359,20 @@
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyPress={e => e.key === 'Enter' && handleInput()}
-              placeholder="Enter command (e.g., look, go north, take crystal)"
+              placeholder="Enter command (e.g., look, go north, take crystal, examine room)"
               className="bg-gray-800 text-green-400 p-2 flex-grow"
+              aria-label="Enter game command"
             />
             <button
               onClick={handleInput}
               className="bg-green-600 text-black p-2 ml-2"
+              aria-label="Submit command"
             >
               Send
             </button>
           </div>
           <p className="text-sm mt-2">
-            Tip: Try commands like "look", "inventory", "go north", "take crystal", "talk to Canuk", or "cast diffusion".
+            Tip: Try "look", "examine room", "go north", "take crystal", "use scroll", "talk to Canuk", "save", or "cast diffusion".
           </p>
         </div>
       );
