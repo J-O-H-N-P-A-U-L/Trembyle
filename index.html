@@ -1,43 +1,4 @@
-<script type="text/javascript">
-        var gk_isXlsx = false;
-        var gk_xlsxFileLookup = {};
-        var gk_fileData = {};
-        function filledCell(cell) {
-          return cell !== '' && cell != null;
-        }
-        function loadFileData(filename) {
-        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
-            try {
-                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
-                var firstSheetName = workbook.SheetNames[0];
-                var worksheet = workbook.Sheets[firstSheetName];
-
-                // Convert sheet to JSON to filter blank rows
-                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                // Filter out blank rows (rows where all cells are empty, null, or undefined)
-                var filteredData = jsonData.filter(row => row.some(filledCell));
-
-                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
-                var headerRowIndex = filteredData.findIndex((row, index) =>
-                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
-                );
-                // Fallback
-                if (headerRowIndex === -1 || headerRowIndex > 25) {
-                  headerRowIndex = 0;
-                }
-
-                // Convert filtered JSON back to CSV
-                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
-                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
-                return csv;
-            } catch (e) {
-                console.error(e);
-                return "";
-            }
-        }
-        return gk_fileData[filename] || "";
-        }
-        </script><!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -87,6 +48,7 @@
       talkedToCanuk: false,
       malveoDefeated: false,
       health: 100,
+      gameOver: false,
       rooms: {
         cavern: {
           description: 'You are in the Illumynite Caverns, glowing with magical light. A Crystal of Illumynite sparkles on a pedestal. Canuk stands nearby, muttering about deception. Exits lead north and east.',
@@ -132,21 +94,22 @@
           return { ...state, currentRoom: action.payload };
         case 'ADD_ITEM':
           return { ...state, inventory: [...state.inventory, action.payload] };
-        case 'REMOVE_ITEM':
-          return {
-            ...state,
-            rooms: {
-              ...state.rooms,
-              [state.currentRoom]: {
-                ...state.rooms[state.currentRoom],
-                items: state.rooms[state.currentRoom].items.filter(i => i !== action.payload),
-              },
-            },
+        case 'REMOVE_ITEM': {
+          const newRooms = { ...state.rooms };
+          newRooms[state.currentRoom] = {
+            ...newRooms[state.currentRoom],
+            items: newRooms[state.currentRoom].items.filter(i => i !== action.payload),
           };
+          return { ...state, rooms: newRooms };
+        }
         case 'TALK_TO_CANUK':
           return { ...state, talkedToCanuk: true, malveoDefeated: true };
-        case 'TAKE_DAMAGE':
-          return { ...state, health: Math.max(0, state.health - action.payload) };
+        case 'TAKE_DAMAGE': {
+          const newHealth = Math.max(0, state.health - action.payload);
+          return { ...state, health: newHealth, gameOver: newHealth <= 0 };
+        }
+        case 'RESTART':
+          return { ...initialState };
         default:
           return state;
       }
@@ -158,16 +121,31 @@
       const [isHighContrast, setIsHighContrast] = useState(false);
       const inputRef = useRef(null);
       const [state, dispatch] = useReducer(gameReducer, initialState);
+      const audioContextRef = useRef(null);
+
+      // Initialize AudioContext
+      useEffect(() => {
+        try {
+          audioContextRef.current = new AudioContext();
+        } catch (e) {
+          console.warn('AudioContext initialization failed:', e);
+        }
+        return () => audioContextRef.current?.close();
+      }, []);
 
       // Sound effects
       const playSound = (type) => {
-        const ctx = new AudioContext();
-        const osc = ctx.createOscillator();
-        osc.type = type === 'success' ? 'sine' : 'square';
-        osc.frequency.setValueAtTime(type === 'success' ? 440 : 220, ctx.currentTime);
-        osc.connect(ctx.destination);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.2);
+        if (!audioContextRef.current) return;
+        try {
+          const osc = audioContextRef.current.createOscillator();
+          osc.type = type === 'success' ? 'sine' : 'square';
+          osc.frequency.setValueAtTime(type === 'success' ? 440 : 220, audioContextRef.current.currentTime);
+          osc.connect(audioContextRef.current.destination);
+          osc.start();
+          osc.stop(audioContextRef.current.currentTime + 0.2);
+        } catch (e) {
+          console.warn('Sound playback failed:', e);
+        }
       };
 
       // Load/Save game
@@ -176,7 +154,10 @@
         if (saved) {
           const parsed = JSON.parse(saved);
           dispatch({ type: 'SET_ROOM', payload: parsed.currentRoom });
-          parsed.inventory.forEach(item => dispatch({ type: 'ADD_ITEM', payload: item }));
+          parsed.inventory.forEach(item => {
+            dispatch({ type: 'REMOVE_ITEM', payload: item });
+            dispatch({ type: 'ADD_ITEM', payload: item });
+          });
           if (parsed.talkedToCanuk) dispatch({ type: 'TALK_TO_CANUK' });
           setOutput(prev => [...prev, 'Game loaded from save.']);
         }
@@ -185,12 +166,16 @@
       }, []);
 
       const saveGame = () => {
-        localStorage.setItem('trembyleState', JSON.stringify({
+        const saveData = {
           currentRoom: state.currentRoom,
           inventory: state.inventory,
           talkedToCanuk: state.talkedToCanuk,
           malveoDefeated: state.malveoDefeated,
-        }));
+          rooms: Object.fromEntries(
+            Object.entries(state.rooms).map(([key, room]) => [key, { ...room, items: [...room.items] }])
+          ),
+        };
+        localStorage.setItem('trembyleState', JSON.stringify(saveData));
         return 'Game saved.';
       };
 
@@ -198,14 +183,15 @@
       const look = () => state.rooms[state.currentRoom].description;
       
       const examine = (target) => {
-        if (target === 'room') {
+        const normalizedTarget = target.toLowerCase();
+        if (normalizedTarget === 'room') {
           return state.rooms[state.currentRoom].examine;
         }
-        if (state.inventory.includes(target)) {
-          return state.items[target].examine;
+        if (state.inventory.includes(normalizedTarget)) {
+          return state.items[normalizedTarget].examine;
         }
-        if (state.rooms[state.currentRoom].items.includes(target)) {
-          return state.items[target].examine;
+        if (state.rooms[state.currentRoom].items.includes(normalizedTarget)) {
+          return state.items[normalizedTarget].examine;
         }
         return `You can't examine ${target}.`;
       };
@@ -225,15 +211,18 @@
         if (!room.items.includes(item)) {
           return `There’s no ${item} here.`;
         }
+        if (state.inventory.includes(item)) {
+          return `You already have the ${state.items[item].name}.`;
+        }
         if (item === 'orb' && !state.malveoDefeated) {
           dispatch({ type: 'TAKE_DAMAGE', payload: 50 });
           playSound('error');
-          return state.health <= 50 
+          return state.gameOver 
             ? 'Malveo blasts you with dark magic! You collapse, defeated.'
             : 'Malveo blocks you with a spell, dealing damage! Talk to Canuk for a plan!';
         }
-        dispatch({ type: 'ADD_ITEM', payload: item });
         dispatch({ type: 'REMOVE_ITEM', payload: item });
+        dispatch({ type: 'ADD_ITEM', payload: item });
         playSound('success');
         return `You take the ${state.items[item].name}.`;
       };
@@ -276,10 +265,17 @@
         return 'You combine the Crystal, Scroll, and Orb, casting the Great Diffusion! Magic scatters across the winds, cleansing the GUE. Victory is yours, Wizard Trembyle!';
       };
 
+      const restart = () => {
+        dispatch({ type: 'RESTART' });
+        setOutput(['Game restarted. Welcome back to Trembyle!']);
+        playSound('success');
+        return look();
+      };
+
       // Flexible command parser
       const processCommand = (command) => {
-        if (state.health <= 0) {
-          return 'You are defeated. Load a save or start over.';
+        if (state.gameOver && !['restart', 'save'].includes(command.toLowerCase().trim())) {
+          return 'You are defeated. Type "restart" to start over or "save" to save your progress.';
         }
         const cmd = command.toLowerCase().trim();
         let response = '';
@@ -294,6 +290,7 @@
           { regex: /^use\s+(.+)$/, handler: (match) => use(match[1]) },
           { regex: /^cast\s+diffusion$/, handler: castDiffusion },
           { regex: /^save$/, handler: saveGame },
+          { regex: /^restart$/, handler: restart },
         ];
 
         const match = patterns.find(p => p.regex.test(cmd));
@@ -338,7 +335,7 @@
           </div>
           <h2 className="text-xl mb-2">Trembyle: The Great Diffusion</h2>
           <div className="flex justify-between mb-4">
-            <p>Health: {state.health}%</p>
+            <p>Health: {state.health}% {state.gameOver ? '(Defeated)' : ''}</p>
             <button
               onClick={() => setIsHighContrast(!isHighContrast)}
               className="bg-gray-600 text-white p-2 rounded"
@@ -362,17 +359,20 @@
               placeholder="Enter command (e.g., look, go north, take crystal, examine room)"
               className="bg-gray-800 text-green-400 p-2 flex-grow"
               aria-label="Enter game command"
+              disabled={state.gameOver && input.toLowerCase().trim() !== 'restart'}
             />
             <button
               onClick={handleInput}
               className="bg-green-600 text-black p-2 ml-2"
               aria-label="Submit command"
+              disabled={state.gameOver && input.toLowerCase().trim() !== 'restart'}
             >
               Send
             </button>
           </div>
           <p className="text-sm mt-2">
-            Tip: Try "look", "examine room", "go north", "take crystal", "use scroll", "talk to Canuk", "save", or "cast diffusion".
+            Tip: Try "look", "examine room", "go north", "take crystal", "use scroll", "talk to Canuk", "save", "restart", or "cast diffusion".
+            {state.gameOver ? ' You are defeated. Type "restart" to start over.' : ''}
           </p>
         </div>
       );
