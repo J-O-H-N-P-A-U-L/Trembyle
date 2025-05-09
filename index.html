@@ -1,4 +1,43 @@
-<!DOCTYPE html>
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -51,19 +90,28 @@
       gameOver: false,
       rooms: {
         cavern: {
-          description: 'You are in the Illumynite Caverns, glowing with magical light. A Crystal of Illumynite sparkles on a pedestal. Canuk stands nearby, muttering about deception. Exits lead north and east.',
+          baseDescription: 'You are in the Illumynite Caverns, glowing with magical light. Canuk stands nearby, muttering about deception.',
+          itemDescriptions: {
+            crystal: 'A Crystal of Illumynite sparkles on a pedestal.'
+          },
           examine: 'The cavern walls pulse with luminescent veins. Canuk’s eyes dart nervously.',
           exits: { north: 'library', east: 'vault' },
           items: ['crystal'],
         },
         library: {
-          description: 'A dusty library filled with ancient tomes. A Scroll of Deception lies open on a table. The air hums with magic. An exit leads south.',
+          baseDescription: 'A dusty library filled with ancient tomes. The air hums with magic.',
+          itemDescriptions: {
+            scroll: 'A Scroll of Deception lies open on a table.'
+          },
           examine: 'The tomes are inscribed with runes. The Scroll glows faintly.',
           exits: { south: 'cavern' },
           items: ['scroll'],
         },
         vault: {
-          description: 'A sealed vault with a magical lock. An Orb of Longevity glows faintly inside a glass case. The evil wizard Malveo lurks here, eyeing you suspiciously. An exit leads west.',
+          baseDescription: 'A sealed vault with a magical lock. The evil wizard Malveo lurks here, eyeing you suspiciously.',
+          itemDescriptions: {
+            orb: 'An Orb of Longevity glows faintly inside a glass case.'
+          },
           examine: 'The lock hums with energy. Malveo’s gaze is unsettling.',
           exits: { west: 'cavern' },
           items: ['orb'],
@@ -90,8 +138,10 @@
 
     function gameReducer(state, action) {
       switch (action.type) {
-        case 'SET_ROOM':
-          return { ...state, currentRoom: action.payload };
+        case 'SET_ROOM': {
+          const roomId = state.rooms[action.payload] ? action.payload : 'cavern';
+          return { ...state, currentRoom: roomId };
+        }
         case 'ADD_ITEM':
           return { ...state, inventory: [...state.inventory, action.payload] };
         case 'REMOVE_ITEM': {
@@ -120,6 +170,7 @@
       const [input, setInput] = useState('');
       const [isHighContrast, setIsHighContrast] = useState(false);
       const inputRef = useRef(null);
+      const outputRef = useRef(null);
       const [state, dispatch] = useReducer(gameReducer, initialState);
       const audioContextRef = useRef(null);
 
@@ -151,18 +202,33 @@
       // Load/Save game
       useEffect(() => {
         const saved = localStorage.getItem('trembyleState');
+        let loadMessage = '';
         if (saved) {
-          const parsed = JSON.parse(saved);
-          dispatch({ type: 'SET_ROOM', payload: parsed.currentRoom });
-          parsed.inventory.forEach(item => {
-            dispatch({ type: 'REMOVE_ITEM', payload: item });
-            dispatch({ type: 'ADD_ITEM', payload: item });
-          });
-          if (parsed.talkedToCanuk) dispatch({ type: 'TALK_TO_CANUK' });
-          setOutput(prev => [...prev, 'Game loaded from save.']);
+          try {
+            const parsed = JSON.parse(saved);
+            if (parsed.currentRoom && state.rooms[parsed.currentRoom]) {
+              dispatch({ type: 'SET_ROOM', payload: parsed.currentRoom });
+              parsed.inventory.forEach(item => {
+                if (state.items[item]) {
+                  dispatch({ type: 'REMOVE_ITEM', payload: item });
+                  dispatch({ type: 'ADD_ITEM', payload: item });
+                }
+              });
+              if (parsed.talkedToCanuk) dispatch({ type: 'TALK_TO_CANUK' });
+              loadMessage = 'Game loaded from save.';
+            } else {
+              localStorage.removeItem('trembyleState');
+              loadMessage = 'Corrupted save detected and cleared. Starting new game.';
+            }
+          } catch (e) {
+            localStorage.removeItem('trembyleState');
+            loadMessage = 'Failed to load save. Starting new game.';
+          }
+        }
+        if (loadMessage) {
+          setOutput(prev => [...prev, loadMessage]);
         }
         inputRef.current?.focus();
-        look(); // Initial room description
       }, []);
 
       const saveGame = () => {
@@ -180,7 +246,24 @@
       };
 
       // Command handlers
-      const look = () => state.rooms[state.currentRoom].description;
+      const look = (roomId = state.currentRoom) => {
+        if (!state.rooms[roomId]) {
+          console.warn(`Invalid roomId: ${roomId}, falling back to cavern`);
+          roomId = 'cavern';
+        }
+        const room = state.rooms[roomId];
+        const itemText = room.items
+          .map(item => room.itemDescriptions[item])
+          .filter(Boolean)
+          .join(' ');
+        const exits = Object.keys(room.exits);
+        const exitText = exits.length === 0
+          ? 'There are no exits.'
+          : exits.length === 1
+            ? `Exit leads ${exits[0]}.`
+            : `Exits lead ${exits.slice(0, -1).join(', ')} and ${exits[exits.length - 1]}.`;
+        return `${room.baseDescription}${itemText ? ' ' + itemText : ''} ${exitText}`.trim();
+      };
       
       const examine = (target) => {
         const normalizedTarget = target.toLowerCase();
@@ -201,9 +284,10 @@
         if (!room.exits[direction]) {
           return 'You can’t go that way.';
         }
-        dispatch({ type: 'SET_ROOM', payload: room.exits[direction] });
+        const newRoom = room.exits[direction];
+        dispatch({ type: 'SET_ROOM', payload: newRoom });
         playSound('success');
-        return look();
+        return look(newRoom);
       };
 
       const take = (item) => {
@@ -269,7 +353,7 @@
         dispatch({ type: 'RESTART' });
         setOutput(['Game restarted. Welcome back to Trembyle!']);
         playSound('success');
-        return look();
+        return '';
       };
 
       // Flexible command parser
@@ -303,7 +387,12 @@
             : 'Please enter a command.';
         }
 
-        setOutput(prev => [...prev, '> ' + command, response]);
+        setOutput(['> ' + command, response]);
+
+        // Scroll to bottom of output
+        if (outputRef.current) {
+          outputRef.current.scrollTop = outputRef.current.scrollHeight;
+        }
       };
 
       // Handle input
@@ -344,7 +433,7 @@
               {isHighContrast ? 'Normal Mode' : 'High Contrast'}
             </button>
           </div>
-          <div className="bg-gray-800 p-4 rounded mb-4 h-96 overflow-y-auto">
+          <div ref={outputRef} className="bg-gray-800 p-4 rounded mb-4 h-96 overflow-y-auto">
             {output.map((line, index) => (
               <p key={index} className="whitespace-pre-wrap">{line}</p>
             ))}
