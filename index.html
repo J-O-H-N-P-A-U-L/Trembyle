@@ -1,0 +1,232 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trembyle</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.development.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.22.5/Babel.js"></script>
+</head>
+<body class="bg-gray-900 text-green-400 font-mono">
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // Game Data
+    const gameState = {
+      currentRoom: 'cavern',
+      inventory: [],
+      talkedToCanuk: false,
+      malveoDefeated: false,
+      rooms: {
+        cavern: {
+          description: 'You are in the Illumynite Caverns, glowing with magical light. A Crystal of Illumynite sparkles on a pedestal. Canuk stands nearby, muttering about deception. Exits lead north and east.',
+          exits: { north: 'library', east: 'vault' },
+          items: ['crystal'],
+        },
+        library: {
+          description: 'A dusty library filled with ancient tomes. A Scroll of Deception lies open on a table. The air hums with magic. An exit leads south.',
+          exits: { south: 'cavern' },
+          items: ['scroll'],
+        },
+        vault: {
+          description: 'A sealed vault with a magical lock. An Orb of Longevity glows faintly inside a glass case. The evil wizard Malveo lurks here, eyeing you suspiciously. An exit leads west.',
+          exits: { west: 'cavern' },
+          items: ['orb'],
+        },
+      },
+      items: {
+        crystal: { name: 'Crystal of Illumynite', description: 'A glowing crystal pulsing with magical energy.' },
+        scroll: { name: 'Scroll of Deception', description: 'A scroll inscribed with illusion spells.' },
+        orb: { name: 'Orb of Longevity', description: 'An orb that grants eternal life.' },
+      },
+    };
+
+    const App = () => {
+      const [output, setOutput] = useState(['Welcome to Trembyle! You are Wizard Trembyle, tasked with casting the Great Diffusion. Type commands like "look", "take crystal", or "talk to Canuk".']);
+      const [input, setInput] = useState('');
+      const inputRef = useRef(null);
+      const stateRef = useRef(gameState);
+
+      // Focus input on mount
+      useEffect(() => {
+        inputRef.current?.focus();
+        look(); // Display initial room description
+      }, []);
+
+      // Parse and process commands
+      const processCommand = (command) => {
+        const cmd = command.toLowerCase().trim();
+        let response = '';
+
+        if (cmd === 'look') {
+          response = look();
+        } else if (cmd.startsWith('go ')) {
+          response = go(cmd.split(' ').slice(1).join(' '));
+        } else if (cmd.startsWith('take ')) {
+          response = take(cmd.split(' ').slice(1).join(' '));
+        } else if (cmd === 'inventory') {
+          response = inventory();
+        } else if (cmd === 'talk to canuk') {
+          response = talkToCanuk();
+        } else if (cmd === 'cast diffusion') {
+          response = castDiffusion();
+        } else {
+          response = 'I don’t understand that command. Try "look", "go north", "take crystal", or "talk to Canuk".';
+        }
+
+        setOutput(prev => [...prev, '> ' + command, response]);
+      };
+
+      // Command Handlers
+      const look = () => {
+        const room = stateRef.current.rooms[stateRef.current.currentRoom];
+        return room.description;
+      };
+
+      const go = (direction) => {
+        const room = stateRef.current.rooms[stateRef.current.currentRoom];
+        if (!room.exits[direction]) {
+          return 'You can’t go that way.';
+        }
+        stateRef.current.currentRoom = room.exits[direction];
+        return look();
+      };
+
+      const take = (item) => {
+        const room = stateRef.current.rooms[stateRef.current.currentRoom];
+        if (!room.items.includes(item)) {
+          return `There’s no ${item} here.`;
+        }
+        if (item === 'orb' && !stateRef.current.malveoDefeated) {
+          return 'Malveo blocks you! Talk to Canuk for a plan!';
+        }
+        stateRef.current.inventory.push(item);
+        room.items = room.items.filter(i => i !== item);
+        return `You take the ${stateRef.current.items[item].name}.`;
+      };
+
+      const inventory = () => {
+        if (stateRef.current.inventory.length === 0) {
+          return 'Your inventory is empty.';
+        }
+        return 'You are carrying: ' + stateRef.current.inventory.map(i => stateRef.current.items[i].name).join(', ');
+      };
+
+      const talkToCanuk = () => {
+        if (stateRef.current.currentRoom !== 'cavern') {
+          return 'Canuk is not here.';
+        }
+        stateRef.current.talkedToCanuk = true;
+        stateRef.current.malveoDefeated = true; // Simplified puzzle: talking to Canuk defeats Malveo
+        return 'Canuk whispers, "I’ll distract Malveo with an illusion. Grab the orb now!"';
+      };
+
+      const castDiffusion = () => {
+        const requiredItems = ['crystal', 'scroll', 'orb'];
+        if (stateRef.current.currentRoom !== 'cavern') {
+          return 'You must be in the Illumynite Caverns to cast the Great Diffusion.';
+        }
+        if (!requiredItems.every(item => stateRef.current.inventory.includes(item))) {
+          return 'You need the Crystal of Illumynite, Scroll of Deception, and Orb of Longevity to cast the Great Diffusion.';
+        }
+        return 'You combine the Crystal, Scroll, and Orb, casting the Great Diffusion! Magic scatters across the winds, cleansing the GUE. Victory is yours, Wizard Trembyle!';
+      };
+
+      // Handle input
+      const handleInput = () => {
+        if (!input.trim()) return;
+        processCommand(input);
+        setInput('');
+        inputRef.current?.focus();
+      };
+
+      // ASCII logo for Trembyle
+      const asciiArt = `
+████████ ██████  ███████ ███    ███ ██████  ██    ██ ██      ███████ 
+   ██    ██   ██ ██      ████  ████ ██   ██  ██  ██  ██      ██      
+   ██    ██████  █████   ██ ████ ██ ██████    ████   ██      █████   
+   ██    ██   ██ ██      ██  ██  ██ ██   ██    ██    ██      ██      
+   ██    ██   ██ ███████ ██      ██ ██████     ██    ███████ ███████ 
+                                                                                                                   
+   A Zork Game
+      `;
+
+      return (
+        <div className="p-4 max-w-4xl mx-auto">
+          <pre className="text-center mb-4">{asciiArt}</pre>
+          <h2 className="text-xl mb-2">Trembyle: The Great Diffusion</h2>
+          <div className="bg-gray-800 p-4 rounded mb-4 h-96 overflow-y-auto">
+            {output.map((line, index) => (
+              <p key={index} className="whitespace-pre-wrap">{line}</p>
+            ))}
+          </div>
+          <div className="flex">
+            <input
+              ref={inputRef}
+              type="text"
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyPress={e => e.key === 'Enter' && handleInput()}
+              placeholder="Enter command (e.g., look, go north, take crystal)"
+              className="bg-gray-800 text-green-400 p-2 flex-grow"
+            />
+            <button
+              onClick={handleInput}
+              className="bg-green-600 text-black p-2 ml-2"
+            >
+              Send
+            </button>
+          </div>
+          <p className="text-sm mt-2">
+            Tip: Try commands like "look", "inventory", "go north", "take crystal", "talk to Canuk", or "cast diffusion".
+          </p>
+        </div>
+      );
+    };
+
+    ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+</body>
+</html>
