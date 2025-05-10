@@ -37,7 +37,7 @@
         }
         return gk_fileData[filename] || "";
         }
-        </script><!DOCTYPE html>
+        </script><!DOCTYPE html>t
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -179,7 +179,7 @@
         }
         case 'INCREMENT_DARKNESS': {
           const newCounter = state.darknessCounter + 1;
-          if (newCounter >= 4) {
+          if (newCounter >= 3) {
             return { ...state, health: 0, gameOver: true, darknessCounter: newCounter };
           }
           return { ...state, darknessCounter: newCounter };
@@ -284,14 +284,14 @@
       };
 
       // Command handlers
-      const look = (roomId = state.currentRoom) => {
-        if (!state.rooms[roomId]) {
-          console.warn(`Invalid roomId: ${roomId}, currentRoom: ${state.currentRoom}, available rooms: ${Object.keys(state.rooms).join(', ')}`);
+      const look = (roomId = state.currentRoom, overrideState = state) => {
+        if (!overrideState.rooms[roomId]) {
+          console.warn(`Invalid roomId: ${roomId}, currentRoom: ${overrideState.currentRoom}, available rooms: ${Object.keys(overrideState.rooms).join(', ')}`);
           roomId = 'cavern';
         }
-        const room = state.rooms[roomId];
+        const room = overrideState.rooms[roomId];
         let baseDescription = room.baseDescription;
-        if (roomId === 'gruePit' && state.isGruePitLit) {
+        if (roomId === 'gruePit' && overrideState.isGruePitLit) {
           baseDescription = room.litDescription;
         }
         const itemText = room.items
@@ -305,24 +305,28 @@
             ? `Exit leads ${exits[0]}.`
             : `Exits lead ${exits.slice(0, -1).join(', ')} and ${exits[exits.length - 1]}.`;
         let description = `${baseDescription}${itemText ? ' ' + itemText : ''} ${exitText}`.trim();
-        if (roomId === 'gruePit' && !state.isGruePitLit) {
-          if (state.darknessCounter === 0) {
+        if (roomId === 'gruePit' && !overrideState.isGruePitLit && !overrideState.gameOver) {
+          if (overrideState.darknessCounter === 0) {
             description += ' It’s pitch black—you can’t see a thing! You should leave or find a light.';
-          } else if (state.darknessCounter === 1) {
+          } else if (overrideState.darknessCounter === 1) {
             description += ' The darkness grows heavier. You hear faint growling. Find a light or get out!';
             playSound('menace');
-          } else if (state.darknessCounter === 2) {
+          } else if (overrideState.darknessCounter === 2) {
             description += ' A Grue is near! Its claws scrape the stone. Light a lantern or flee now!';
             playSound('menace');
-          } else if (state.darknessCounter >= 3) {
-            description = 'A Grue devours you in the darkness! You are eaten, Wizard Trembyle.';
-            playSound('error');
           }
+        }
+        if (roomId === 'gruePit' && overrideState.gameOver) {
+          description = 'A Grue devours you in the darkness! You are eaten, Wizard Trembyle.';
+          playSound('error');
         }
         return description;
       };
       
       const examine = (target) => {
+        if (state.gameOver) {
+          return 'You are defeated. Type "restart" to start over or "save" to save your progress.';
+        }
         const normalizedTarget = target.toLowerCase();
         if (normalizedTarget === 'room') {
           return state.currentRoom === 'gruePit' && state.isGruePitLit
@@ -339,6 +343,9 @@
       };
 
       const go = (direction) => {
+        if (state.gameOver) {
+          return 'You are defeated. Type "restart" to start over or "save" to save your progress.';
+        }
         const room = state.rooms[state.currentRoom];
         if (!room.exits[direction]) {
           return 'You can’t go that way.';
@@ -351,6 +358,9 @@
       };
 
       const take = (item) => {
+        if (state.gameOver) {
+          return 'You are defeated. Type "restart" to start over or "save" to save your progress.';
+        }
         const room = state.rooms[state.currentRoom];
         if (!room.items.includes(item)) {
           return `There’s no ${item} here.`;
@@ -371,6 +381,9 @@
       };
 
       const inventory = () => {
+        if (state.gameOver) {
+          return 'You are defeated. Type "restart" to start over or "save" to save your progress.';
+        }
         if (state.inventory.length === 0) {
           return 'Your inventory is empty.';
         }
@@ -378,6 +391,9 @@
       };
 
       const talkToCanuk = () => {
+        if (state.gameOver) {
+          return 'You are defeated. Type "restart" to start over or "save" to save your progress.';
+        }
         if (state.currentRoom !== 'cavern') {
           return 'Canuk is not here.';
         }
@@ -386,22 +402,32 @@
         return 'Canuk whispers, "I’ll distract Malveo with an illusion. Grab the orb now!"';
       };
 
-      const use = (item) => {
-        if (!state.inventory.includes(item)) {
+      const use = (item, overrideState = state) => {
+        if (overrideState.gameOver) {
+          return 'You are defeated. Type "restart" to start over or "save" to save your progress.';
+        }
+        if (!overrideState.inventory.includes(item)) {
           return `You don’t have ${item}.`;
         }
         if (item === 'scroll') {
           return 'You read the Scroll of Deception: "Illusions can fool even the mightiest wizards."';
         }
-        if (item === 'lantern' && state.currentRoom === 'gruePit') {
+        if (item === 'lantern' && overrideState.currentRoom === 'gruePit') {
+          if (overrideState.darknessCounter >= 3) {
+            dispatch({ type: 'INCREMENT_DARKNESS' });
+            return look('gruePit', { ...overrideState, gameOver: true, health: 0, darknessCounter: overrideState.darknessCounter + 1 });
+          }
           dispatch({ type: 'LIGHT_LANTERN' });
           playSound('success');
           return 'You light the Lantern, banishing the darkness! The Grue Pit is now illuminated.';
         }
-        return `You can’t use the ${state.items[item].name} right now.`;
+        return `You can’t use the ${overrideState.items[item].name} right now.`;
       };
 
       const castDiffusion = () => {
+        if (state.gameOver) {
+          return 'You are defeated. Type "restart" to start over or "save" to save your progress.';
+        }
         const requiredItems = ['crystal', 'scroll', 'orb'];
         if (state.currentRoom !== 'cavern') {
           return 'You must be in the Illumynite Caverns to cast the Great Diffusion.';
@@ -422,11 +448,25 @@
 
       // Flexible command parser
       const processCommand = (command) => {
-        if (state.gameOver && !['restart', 'save'].includes(command.toLowerCase().trim())) {
-          return 'You are defeated. Type "restart" to start over or "save" to save your progress.';
-        }
         const cmd = command.toLowerCase().trim();
         let response = '';
+
+        // Handle Grue Pit darkness counter
+        if (state.currentRoom === 'gruePit' && !state.isGruePitLit && !state.gameOver && !cmd.startsWith('go west') && !(cmd === 'use lantern')) {
+          const newCounter = state.darknessCounter + 1;
+          dispatch({ type: 'INCREMENT_DARKNESS' });
+          if (newCounter >= 3) {
+            const newState = gameReducer(state, { type: 'INCREMENT_DARKNESS' });
+            response = look('gruePit', newState);
+            setOutput(['> ' + command, response]);
+            return;
+          }
+        }
+
+        // Check gameOver after Grue Pit logic
+        if (state.gameOver && !['restart', 'save'].includes(cmd)) {
+          return 'You are defeated. Type "restart" to start over or "save" to save your progress.';
+        }
 
         const patterns = [
           { regex: /^(look|describe)$/, handler: () => look(state.currentRoom) },
@@ -449,11 +489,6 @@
           response = cmd 
             ? 'I don’t understand that command. Try "look", "go north", "take crystal", "examine room", or "talk to Canuk".'
             : 'Please enter a command.';
-        }
-
-        // Increment darkness counter in Grue Pit if not lit and not exiting
-        if (state.currentRoom === 'gruePit' && !state.isGruePitLit && !cmd.startsWith('go west') && !cmd.startsWith('use lantern')) {
-          dispatch({ type: 'INCREMENT_DARKNESS' });
         }
 
         setOutput(['> ' + command, response]);
