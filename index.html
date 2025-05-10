@@ -142,15 +142,17 @@
           const roomId = state.rooms[action.payload] ? action.payload : 'cavern';
           return { ...state, currentRoom: roomId };
         }
-        case 'ADD_ITEM':
-          return { ...state, inventory: [...state.inventory, action.payload] };
-        case 'REMOVE_ITEM': {
+        case 'TAKE_ITEM': {
           const newRooms = { ...state.rooms };
           newRooms[state.currentRoom] = {
             ...newRooms[state.currentRoom],
             items: newRooms[state.currentRoom].items.filter(i => i !== action.payload),
           };
-          return { ...state, rooms: newRooms };
+          return {
+            ...state,
+            rooms: newRooms,
+            inventory: [...state.inventory, action.payload],
+          };
         }
         case 'TALK_TO_CANUK':
           return { ...state, talkedToCanuk: true, malveoDefeated: true };
@@ -184,6 +186,11 @@
         return () => audioContextRef.current?.close();
       }, []);
 
+      // Debug currentRoom changes
+      useEffect(() => {
+        console.log(`Current room updated to: ${state.currentRoom}`);
+      }, [state.currentRoom]);
+
       // Sound effects
       const playSound = (type) => {
         if (!audioContextRef.current) return;
@@ -210,8 +217,7 @@
               dispatch({ type: 'SET_ROOM', payload: parsed.currentRoom });
               parsed.inventory.forEach(item => {
                 if (state.items[item]) {
-                  dispatch({ type: 'REMOVE_ITEM', payload: item });
-                  dispatch({ type: 'ADD_ITEM', payload: item });
+                  dispatch({ type: 'TAKE_ITEM', payload: item });
                 }
               });
               if (parsed.talkedToCanuk) dispatch({ type: 'TALK_TO_CANUK' });
@@ -248,7 +254,7 @@
       // Command handlers
       const look = (roomId = state.currentRoom) => {
         if (!state.rooms[roomId]) {
-          console.warn(`Invalid roomId: ${roomId}, falling back to cavern`);
+          console.warn(`Invalid roomId: ${roomId}, currentRoom: ${state.currentRoom}, available rooms: ${Object.keys(state.rooms).join(', ')}`);
           roomId = 'cavern';
         }
         const room = state.rooms[roomId];
@@ -287,6 +293,7 @@
         const newRoom = room.exits[direction];
         dispatch({ type: 'SET_ROOM', payload: newRoom });
         playSound('success');
+        console.log(`Moved to room: ${newRoom}`);
         return look(newRoom);
       };
 
@@ -305,8 +312,7 @@
             ? 'Malveo blasts you with dark magic! You collapse, defeated.'
             : 'Malveo blocks you with a spell, dealing damage! Talk to Canuk for a plan!';
         }
-        dispatch({ type: 'REMOVE_ITEM', payload: item });
-        dispatch({ type: 'ADD_ITEM', payload: item });
+        dispatch({ type: 'TAKE_ITEM', payload: item });
         playSound('success');
         return `You take the ${state.items[item].name}.`;
       };
@@ -365,7 +371,7 @@
         let response = '';
 
         const patterns = [
-          { regex: /^(look|describe)$/, handler: look },
+          { regex: /^(look|describe)$/, handler: () => look(state.currentRoom) },
           { regex: /^(examine|inspect)\s+(.+)$/, handler: (match) => examine(match[2]) },
           { regex: /^go\s+(.+)$/, handler: (match) => go(match[1]) },
           { regex: /^(take|pickup)\s+(.+)$/, handler: (match) => take(match[2]) },
