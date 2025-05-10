@@ -88,6 +88,8 @@
       malveoDefeated: false,
       health: 100,
       gameOver: false,
+      darknessCounter: 0,
+      isGruePitLit: false,
       rooms: {
         cavern: {
           baseDescription: 'You are in the Illumynite Caverns, glowing with magical light. Canuk stands nearby, muttering about deception.',
@@ -110,11 +112,21 @@
         vault: {
           baseDescription: 'A sealed vault with a magical lock. The evil wizard Malveo lurks here, eyeing you suspiciously.',
           itemDescriptions: {
-            orb: 'An Orb of Longevity glows faintly inside a glass case.'
+            orb: 'An Orb of Longevity glows faintly inside a glass case.',
+            lantern: 'A dusty Lantern rests in a corner.'
           },
           examine: 'The lock hums with energy. Malveo’s gaze is unsettling.',
-          exits: { west: 'cavern' },
-          items: ['orb'],
+          exits: { west: 'cavern', east: 'gruePit' },
+          items: ['orb', 'lantern'],
+        },
+        gruePit: {
+          baseDescription: 'You are in a pitch-black Grue Pit. No light penetrates the oppressive darkness.',
+          litDescription: 'The Grue Pit is now lit by your Lantern, revealing damp stone walls etched with claw marks.',
+          itemDescriptions: {},
+          examine: 'The darkness is absolute, hiding unseen dangers. You hear faint skittering.',
+          litExamine: 'The walls are scarred with deep scratches, as if something large prowled here.',
+          exits: { west: 'vault' },
+          items: [],
         },
       },
       items: {
@@ -133,6 +145,11 @@
           description: 'An orb that grants eternal life.',
           examine: 'The orb’s glow promises vitality but feels heavy.'
         },
+        lantern: { 
+          name: 'Lantern', 
+          description: 'A sturdy lantern that could pierce the darkest gloom.',
+          examine: 'The lantern’s glass is intact, ready to cast a warm glow.'
+        },
       },
     };
 
@@ -140,7 +157,7 @@
       switch (action.type) {
         case 'SET_ROOM': {
           const roomId = state.rooms[action.payload] ? action.payload : 'cavern';
-          return { ...state, currentRoom: roomId };
+          return { ...state, currentRoom: roomId, darknessCounter: 0 };
         }
         case 'TAKE_ITEM': {
           const newRooms = { ...state.rooms };
@@ -160,6 +177,15 @@
           const newHealth = Math.max(0, state.health - action.payload);
           return { ...state, health: newHealth, gameOver: newHealth <= 0 };
         }
+        case 'INCREMENT_DARKNESS': {
+          const newCounter = state.darknessCounter + 1;
+          if (newCounter >= 4) {
+            return { ...state, health: 0, gameOver: true, darknessCounter: newCounter };
+          }
+          return { ...state, darknessCounter: newCounter };
+        }
+        case 'LIGHT_LANTERN':
+          return { ...state, isGruePitLit: true, darknessCounter: 0 };
         case 'RESTART':
           return { ...initialState };
         default:
@@ -197,10 +223,13 @@
         try {
           const osc = audioContextRef.current.createOscillator();
           osc.type = type === 'success' ? 'sine' : 'square';
-          osc.frequency.setValueAtTime(type === 'success' ? 440 : 220, audioContextRef.current.currentTime);
+          osc.frequency.setValueAtTime(
+            type === 'success' ? 440 : type === 'menace' ? 110 : 220,
+            audioContextRef.current.currentTime
+          );
           osc.connect(audioContextRef.current.destination);
           osc.start();
-          osc.stop(audioContextRef.current.currentTime + 0.2);
+          osc.stop(audioContextRef.current.currentTime + (type === 'menace' ? 0.5 : 0.2));
         } catch (e) {
           console.warn('Sound playback failed:', e);
         }
@@ -221,6 +250,7 @@
                 }
               });
               if (parsed.talkedToCanuk) dispatch({ type: 'TALK_TO_CANUK' });
+              if (parsed.isGruePitLit) dispatch({ type: 'LIGHT_LANTERN' });
               loadMessage = 'Game loaded from save.';
             } else {
               localStorage.removeItem('trembyleState');
@@ -243,6 +273,8 @@
           inventory: state.inventory,
           talkedToCanuk: state.talkedToCanuk,
           malveoDefeated: state.malveoDefeated,
+          isGruePitLit: state.isGruePitLit,
+          darknessCounter: state.darknessCounter,
           rooms: Object.fromEntries(
             Object.entries(state.rooms).map(([key, room]) => [key, { ...room, items: [...room.items] }])
           ),
@@ -258,6 +290,10 @@
           roomId = 'cavern';
         }
         const room = state.rooms[roomId];
+        let baseDescription = room.baseDescription;
+        if (roomId === 'gruePit' && state.isGruePitLit) {
+          baseDescription = room.litDescription;
+        }
         const itemText = room.items
           .map(item => room.itemDescriptions[item])
           .filter(Boolean)
@@ -268,13 +304,30 @@
           : exits.length === 1
             ? `Exit leads ${exits[0]}.`
             : `Exits lead ${exits.slice(0, -1).join(', ')} and ${exits[exits.length - 1]}.`;
-        return `${room.baseDescription}${itemText ? ' ' + itemText : ''} ${exitText}`.trim();
+        let description = `${baseDescription}${itemText ? ' ' + itemText : ''} ${exitText}`.trim();
+        if (roomId === 'gruePit' && !state.isGruePitLit) {
+          if (state.darknessCounter === 0) {
+            description += ' It’s pitch black—you can’t see a thing! You should leave or find a light.';
+          } else if (state.darknessCounter === 1) {
+            description += ' The darkness grows heavier. You hear faint growling. Find a light or get out!';
+            playSound('menace');
+          } else if (state.darknessCounter === 2) {
+            description += ' A Grue is near! Its claws scrape the stone. Light a lantern or flee now!';
+            playSound('menace');
+          } else if (state.darknessCounter >= 3) {
+            description = 'A Grue devours you in the darkness! You are eaten, Wizard Trembyle.';
+            playSound('error');
+          }
+        }
+        return description;
       };
       
       const examine = (target) => {
         const normalizedTarget = target.toLowerCase();
         if (normalizedTarget === 'room') {
-          return state.rooms[state.currentRoom].examine;
+          return state.currentRoom === 'gruePit' && state.isGruePitLit
+            ? state.rooms[state.currentRoom].litExamine
+            : state.rooms[state.currentRoom].examine;
         }
         if (state.inventory.includes(normalizedTarget)) {
           return state.items[normalizedTarget].examine;
@@ -340,6 +393,11 @@
         if (item === 'scroll') {
           return 'You read the Scroll of Deception: "Illusions can fool even the mightiest wizards."';
         }
+        if (item === 'lantern' && state.currentRoom === 'gruePit') {
+          dispatch({ type: 'LIGHT_LANTERN' });
+          playSound('success');
+          return 'You light the Lantern, banishing the darkness! The Grue Pit is now illuminated.';
+        }
         return `You can’t use the ${state.items[item].name} right now.`;
       };
 
@@ -391,6 +449,11 @@
           response = cmd 
             ? 'I don’t understand that command. Try "look", "go north", "take crystal", "examine room", or "talk to Canuk".'
             : 'Please enter a command.';
+        }
+
+        // Increment darkness counter in Grue Pit if not lit and not exiting
+        if (state.currentRoom === 'gruePit' && !state.isGruePitLit && !cmd.startsWith('go west') && !cmd.startsWith('use lantern')) {
+          dispatch({ type: 'INCREMENT_DARKNESS' });
         }
 
         setOutput(['> ' + command, response]);
